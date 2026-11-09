@@ -155,11 +155,19 @@
             <Grid>
                 <!-- LAYER 1: Ambient Wallpaper Light Gradients (Aurora/Glow Spheres like ChatGPT Desktop) -->
                 <Grid IsHitTestVisible="False">
-                    <!-- Top-Left Soft Cyan/Blue Glow -->
-                    <Ellipse HorizontalAlignment="Left" VerticalAlignment="Top" Width="280" Height="200" Margin="-60,-70,0,0">
+                    <!-- Dynamic Cursor-Following Ambient Light / Spotlight (ChatGPT Desktop Glassmorphism) -->
+                    <Ellipse x:Name="AmbientSpotlight"
+                             HorizontalAlignment="Left" VerticalAlignment="Top"
+                             Width="320" Height="240"
+                             Margin="-160,-120,0,0"
+                             IsHitTestVisible="False">
+                        <Ellipse.RenderTransform>
+                            <TranslateTransform x:Name="SpotlightTransform" X="80" Y="40" />
+                        </Ellipse.RenderTransform>
                         <Ellipse.Fill>
                             <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
-                                <GradientStop Color="#254E8DFF" Offset="0.0" />
+                                <GradientStop Color="#2E4E8DFF" Offset="0.0" />
+                                <GradientStop Color="#144E8DFF" Offset="0.45" />
                                 <GradientStop Color="#004E8DFF" Offset="1.0" />
                             </RadialGradientBrush>
                         </Ellipse.Fill>

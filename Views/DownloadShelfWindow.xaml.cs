@@ -32,6 +32,12 @@ namespace MasseterDrop.Views
         private bool _isSettingsOpen = false;
         private bool _isDismissing = false;
 
+        // Interactive Cursor-Following Ambient Light Gradient (ChatGPT Desktop Style)
+        private readonly Point _restingSpotlightPos = new Point(80, 40);
+        private Point _currentSpotlightPos = new Point(80, 40);
+        private Point _targetSpotlightPos = new Point(80, 40);
+        private bool _isSpotlightActive = false;
+
         public DownloadsViewModel ViewModel => _viewModel;
 
         public DownloadShelfWindow(SettingsService settingsService, DownloadsViewModel viewModel)
@@ -63,8 +69,10 @@ namespace MasseterDrop.Views
             SourceInitialized += DownloadShelfWindow_SourceInitialized;
             MouseEnter += DownloadShelfWindow_MouseEnter;
             MouseLeave += DownloadShelfWindow_MouseLeave;
+            PreviewMouseMove += DownloadShelfWindow_PreviewMouseMove;
             PreviewKeyDown += DownloadShelfWindow_PreviewKeyDown;
             Deactivated += DownloadShelfWindow_Deactivated;
+            Closed += DownloadShelfWindow_Closed;
         }
 
         private void DownloadShelfWindow_SourceInitialized(object? sender, EventArgs e)
@@ -107,6 +115,7 @@ namespace MasseterDrop.Views
         {
             _isDismissing = false;
             PositionNearTaskbar();
+            StopSpotlightTracking(snapToRest: true);
 
             // Scroll to the newest file
             ShelfScrollViewer.ScrollToLeftEnd();
@@ -164,6 +173,7 @@ namespace MasseterDrop.Views
         {
             _isDismissing = false;
             PositionNearTaskbar();
+            StopSpotlightTracking(snapToRest: true);
             ShelfScrollViewer.ScrollToLeftEnd();
 
             ShelfSurface.Opacity = 0.0;
@@ -200,6 +210,7 @@ namespace MasseterDrop.Views
             _isDismissing = true;
 
             StopAutoDismiss();
+            StopSpotlightTracking(snapToRest: true);
 
             var fadeOut = new DoubleAnimation(1.0, 0.0, TimeSpan.FromMilliseconds(160))
             {
@@ -288,6 +299,10 @@ namespace MasseterDrop.Views
         {
             _isHovered = false;
 
+            // Smoothly glide ambient spotlight back to resting top-left position
+            _targetSpotlightPos = _restingSpotlightPos;
+            StartSpotlightTracking();
+
             if (_isAutoDismissActive && IsVisible && !_isDismissing)
             {
                 // Resume with at least 4 seconds remaining so it never disappears abruptly
@@ -302,6 +317,85 @@ namespace MasseterDrop.Views
 
                 _countdownTicker.Stop();
                 _countdownTicker.Start();
+            }
+        }
+
+        private void DownloadShelfWindow_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            Point pos = e.GetPosition(ShelfSurface);
+
+            // Clamp within shelf bounds
+            double maxX = ShelfSurface.ActualWidth > 0 ? ShelfSurface.ActualWidth : Width;
+            double maxY = ShelfSurface.ActualHeight > 0 ? ShelfSurface.ActualHeight : Height;
+            double clampedX = Math.Max(0, Math.Min(maxX, pos.X));
+            double clampedY = Math.Max(0, Math.Min(maxY, pos.Y));
+
+            _targetSpotlightPos = new Point(clampedX, clampedY);
+            StartSpotlightTracking();
+        }
+
+        private void DownloadShelfWindow_Closed(object? sender, EventArgs e)
+        {
+            StopSpotlightTracking(snapToRest: true);
+        }
+
+        private void StartSpotlightTracking()
+        {
+            if (!_isSpotlightActive)
+            {
+                _isSpotlightActive = true;
+                CompositionTarget.Rendering += OnSpotlightRender;
+            }
+        }
+
+        private void StopSpotlightTracking(bool snapToRest = false)
+        {
+            if (_isSpotlightActive)
+            {
+                CompositionTarget.Rendering -= OnSpotlightRender;
+                _isSpotlightActive = false;
+            }
+
+            if (snapToRest && SpotlightTransform != null)
+            {
+                _currentSpotlightPos = _restingSpotlightPos;
+                _targetSpotlightPos = _restingSpotlightPos;
+                SpotlightTransform.X = _restingSpotlightPos.X;
+                SpotlightTransform.Y = _restingSpotlightPos.Y;
+            }
+        }
+
+        private void OnSpotlightRender(object? sender, EventArgs e)
+        {
+            if (SpotlightTransform == null) return;
+
+            // Fluid spring lerp towards target position
+            double dx = _targetSpotlightPos.X - _currentSpotlightPos.X;
+            double dy = _targetSpotlightPos.Y - _currentSpotlightPos.Y;
+
+            // Smooth lerp factor (0.20 delivers responsive yet organic fluid inertia)
+            _currentSpotlightPos.X += dx * 0.20;
+            _currentSpotlightPos.Y += dy * 0.20;
+
+            SpotlightTransform.X = _currentSpotlightPos.X;
+            SpotlightTransform.Y = _currentSpotlightPos.Y;
+
+            // Idle check: if settled, stop render loop to consume 0% CPU
+            if (Math.Abs(dx) < 0.25 && Math.Abs(dy) < 0.25)
+            {
+                if (!_isHovered)
+                {
+                    StopSpotlightTracking(snapToRest: true);
+                }
+                else
+                {
+                    // Stationary mouse inside panel: pause rendering until mouse moves again
+                    if (_isSpotlightActive)
+                    {
+                        CompositionTarget.Rendering -= OnSpotlightRender;
+                        _isSpotlightActive = false;
+                    }
+                }
             }
         }
 
