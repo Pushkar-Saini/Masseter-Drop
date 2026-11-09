@@ -26,7 +26,7 @@ namespace MasseterDrop.Views
 
         private void SettingsWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            NativeMethods.ApplyModernWindowStyle(this, isDarkMode: true);
+            ThemeService.Apply(this, _settingsService.CurrentSettings.Theme);
         }
 
         private void LoadCurrentValues()
@@ -38,35 +38,6 @@ namespace MasseterDrop.Views
             ChkStartMinimized.IsChecked = s.StartMinimized;
             ChkKeepRunning.IsChecked = s.KeepRunningOnClose;
             ChkAutoDismiss.IsChecked = s.AutoDismissOnDeactivate;
-
-            // Max files
-            string maxFilesStr = s.MaxRecentFiles.ToString();
-            foreach (ComboBoxItem item in CmbMaxFiles.Items)
-            {
-                if (item.Content.ToString() == maxFilesStr)
-                {
-                    CmbMaxFiles.SelectedItem = item;
-                    break;
-                }
-            }
-            if (CmbMaxFiles.SelectedItem == null)
-            {
-                CmbMaxFiles.SelectedIndex = 1; // Default 100
-            }
-
-            // Theme
-            foreach (ComboBoxItem item in CmbTheme.Items)
-            {
-                if (string.Equals(item.Content.ToString(), s.Theme, StringComparison.OrdinalIgnoreCase))
-                {
-                    CmbTheme.SelectedItem = item;
-                    break;
-                }
-            }
-            if (CmbTheme.SelectedItem == null)
-            {
-                CmbTheme.SelectedIndex = 0; // Dark
-            }
         }
 
         private void BrowseFolder_Click(object sender, RoutedEventArgs e)
@@ -115,15 +86,9 @@ namespace MasseterDrop.Views
             s.KeepRunningOnClose = ChkKeepRunning.IsChecked == true;
             s.AutoDismissOnDeactivate = ChkAutoDismiss.IsChecked == true;
 
-            if (CmbMaxFiles.SelectedItem is ComboBoxItem maxItem && int.TryParse(maxItem.Content.ToString(), out int max))
-            {
-                s.MaxRecentFiles = max;
-            }
-
-            if (CmbTheme.SelectedItem is ComboBoxItem themeItem)
-            {
-                s.Theme = themeItem.Content.ToString() ?? "Dark";
-            }
+            // Sensible internal defaults
+            s.MaxRecentFiles = 100;
+            s.Theme = "Dark";
 
             _settingsService.SaveSettings(s);
             _onSettingsSaved();

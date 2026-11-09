@@ -35,7 +35,8 @@ namespace MasseterDrop.Converters
         {
             bool isNotNull = value != null;
             if (value is string s) isNotNull = !string.IsNullOrWhiteSpace(s);
-            if (Invert) isNotNull = !isNotNull;
+            bool invert = Invert || (parameter is string p && string.Equals(p, "invert", StringComparison.OrdinalIgnoreCase));
+            if (invert) isNotNull = !isNotNull;
             return isNotNull ? Visibility.Visible : Visibility.Collapsed;
         }
 

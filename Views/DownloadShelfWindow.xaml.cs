@@ -1,0 +1,402 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Threading;
+using MasseterDrop.Helpers;
+using MasseterDrop.Models;
+using MasseterDrop.Services;
+using MasseterDrop.ViewModels;
+using Point = System.Windows.Point;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+
+namespace MasseterDrop.Views
+{
+    public partial class DownloadShelfWindow : Window
+    {
+        private readonly SettingsService _settingsService;
+        private readonly DownloadsViewModel _viewModel;
+        private readonly DispatcherTimer _autoDismissTimer;
+        private readonly DispatcherTimer _countdownTicker;
+
+        private const double AutoDismissSeconds = 8.0;
+        private double _remainingSeconds = AutoDismissSeconds;
+        private bool _isHovered = false;
+        private bool _isAutoDismissActive = false;
+        private bool _isSettingsOpen = false;
+        private bool _isDismissing = false;
+
+        public DownloadsViewModel ViewModel => _viewModel;
+
+        public DownloadShelfWindow(SettingsService settingsService, DownloadsViewModel viewModel)
+        {
+            InitializeComponent();
+            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+
+            DataContext = _viewModel;
+
+            _viewModel.FileCompletedEvent += OnFileCompleted;
+            _viewModel.RequestOpenSettings += OnRequestOpenSettings;
+
+            // Timer for the 8-second auto-dismiss
+            _autoDismissTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(AutoDismissSeconds)
+            };
+            _autoDismissTimer.Tick += AutoDismissTimer_Tick;
+
+            // Smooth countdown progress ticker (~30fps)
+            _countdownTicker = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _countdownTicker.Tick += CountdownTicker_Tick;
+
+            Loaded += DownloadShelfWindow_Loaded;
+            SourceInitialized += DownloadShelfWindow_SourceInitialized;
+            MouseEnter += DownloadShelfWindow_MouseEnter;
+            MouseLeave += DownloadShelfWindow_MouseLeave;
+            PreviewKeyDown += DownloadShelfWindow_PreviewKeyDown;
+            Deactivated += DownloadShelfWindow_Deactivated;
+        }
+
+        private void DownloadShelfWindow_SourceInitialized(object? sender, EventArgs e)
+        {
+            var helper = new WindowInteropHelper(this);
+            IntPtr hwnd = helper.Handle;
+
+            // Zero Focus Stealing: Configure as non-activating tool window
+            NativeMethods.SetNonActivatingToolWindow(hwnd);
+            NativeMethods.ApplyModernWindowStyle(this, isDarkMode: true);
+
+            // Enable real OS-level Acrylic glass blur behind the window
+            NativeMethods.EnableAcrylicBlur(hwnd, 0x4010141D);
+        }
+
+        private void DownloadShelfWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            PositionNearTaskbar();
+        }
+
+        public void PositionNearTaskbar()
+        {
+            double w = ActualWidth > 0 ? ActualWidth : Width;
+            double h = ActualHeight > 0 ? ActualHeight : Height;
+
+            Point pos = TaskbarService.CalculatePanelPosition(w, h);
+            Left = pos.X;
+            Top = pos.Y;
+        }
+
+        private void OnFileCompleted(DownloadItem item)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                ShowAutoPopup(item);
+            });
+        }
+
+        public void ShowAutoPopup(DownloadItem item)
+        {
+            _isDismissing = false;
+            PositionNearTaskbar();
+
+            // Scroll to the newest file
+            ShelfScrollViewer.ScrollToLeftEnd();
+
+            // Setup entrance animation
+            ShelfSurface.Opacity = 0.0;
+            ShelfTranslateTransform.Y = 22.0;
+
+            if (!IsVisible)
+            {
+                var helper = new WindowInteropHelper(this);
+                if (helper.Handle != IntPtr.Zero)
+                {
+                    NativeMethods.ShowWindow(helper.Handle, NativeMethods.SW_SHOWNOACTIVATE);
+                }
+                Show();
+            }
+
+            // Animate entrance: Opacity 0 -> 1, TranslateY 22 -> 0, Scale 0.95 -> 1.0
+            var fadeIn = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(220))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            var slideUp = new DoubleAnimation(22.0, 0.0, TimeSpan.FromMilliseconds(240))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            var scaleIn = new DoubleAnimation(0.95, 1.0, TimeSpan.FromMilliseconds(240))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            ShelfSurface.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            ShelfTranslateTransform.BeginAnimation(TranslateTransform.YProperty, slideUp);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleIn);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleIn);
+
+            // Start 8-second auto-dismiss countdown
+            StartAutoDismiss();
+        }
+
+        public void ToggleShelf()
+        {
+            if (IsVisible && !_isDismissing)
+            {
+                DismissShelf();
+            }
+            else
+            {
+                ShowManual();
+            }
+        }
+
+        public void ShowManual()
+        {
+            _isDismissing = false;
+            PositionNearTaskbar();
+            ShelfScrollViewer.ScrollToLeftEnd();
+
+            ShelfSurface.Opacity = 0.0;
+            ShelfTranslateTransform.Y = 18.0;
+
+            Show();
+
+            var fadeIn = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            var slideUp = new DoubleAnimation(18.0, 0.0, TimeSpan.FromMilliseconds(200))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            var scaleIn = new DoubleAnimation(0.96, 1.0, TimeSpan.FromMilliseconds(200))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            ShelfSurface.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            ShelfTranslateTransform.BeginAnimation(TranslateTransform.YProperty, slideUp);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleIn);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleIn);
+
+            // In manual mode, we do not abruptly close in 8s unless idle
+            StopAutoDismiss();
+            DismissalProgressBar.Value = 100;
+        }
+
+        public void DismissShelf()
+        {
+            if (_isDismissing || !IsVisible) return;
+            _isDismissing = true;
+
+            StopAutoDismiss();
+
+            var fadeOut = new DoubleAnimation(1.0, 0.0, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+            var slideDown = new DoubleAnimation(0.0, 16.0, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+            var scaleOut = new DoubleAnimation(1.0, 0.96, TimeSpan.FromMilliseconds(160))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+
+            fadeOut.Completed += (s, e) =>
+            {
+                Hide();
+                ShelfSurface.Opacity = 1.0;
+                ShelfTranslateTransform.Y = 0.0;
+                ShelfScaleTransform.ScaleX = 1.0;
+                ShelfScaleTransform.ScaleY = 1.0;
+                _isDismissing = false;
+            };
+
+            ShelfSurface.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+            ShelfTranslateTransform.BeginAnimation(TranslateTransform.YProperty, slideDown);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleOut);
+            ShelfScaleTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleOut);
+        }
+
+        private void StartAutoDismiss()
+        {
+            _remainingSeconds = AutoDismissSeconds;
+            _isAutoDismissActive = true;
+            DismissalProgressBar.Value = 100;
+
+            _autoDismissTimer.Stop();
+            _autoDismissTimer.Interval = TimeSpan.FromSeconds(AutoDismissSeconds);
+            _autoDismissTimer.Start();
+
+            _countdownTicker.Stop();
+            _countdownTicker.Start();
+        }
+
+        private void StopAutoDismiss()
+        {
+            _isAutoDismissActive = false;
+            _autoDismissTimer.Stop();
+            _countdownTicker.Stop();
+            DismissalProgressBar.Value = 100;
+        }
+
+        private void AutoDismissTimer_Tick(object? sender, EventArgs e)
+        {
+            if (!_isHovered && !_isSettingsOpen)
+            {
+                DismissShelf();
+            }
+        }
+
+        private void CountdownTicker_Tick(object? sender, EventArgs e)
+        {
+            if (_isHovered) return;
+
+            _remainingSeconds -= 0.05;
+            if (_remainingSeconds <= 0)
+            {
+                _remainingSeconds = 0;
+                DismissalProgressBar.Value = 0;
+                _countdownTicker.Stop();
+            }
+            else
+            {
+                DismissalProgressBar.Value = (_remainingSeconds / AutoDismissSeconds) * 100.0;
+            }
+        }
+
+        private void DownloadShelfWindow_MouseEnter(object sender, MouseEventArgs e)
+        {
+            _isHovered = true;
+            _autoDismissTimer.Stop();
+            _countdownTicker.Stop();
+        }
+
+        private void DownloadShelfWindow_MouseLeave(object sender, MouseEventArgs e)
+        {
+            _isHovered = false;
+
+            if (_isAutoDismissActive && IsVisible && !_isDismissing)
+            {
+                // Resume with at least 4 seconds remaining so it never disappears abruptly
+                if (_remainingSeconds < 4.0)
+                {
+                    _remainingSeconds = 4.0;
+                }
+
+                _autoDismissTimer.Stop();
+                _autoDismissTimer.Interval = TimeSpan.FromSeconds(_remainingSeconds);
+                _autoDismissTimer.Start();
+
+                _countdownTicker.Stop();
+                _countdownTicker.Start();
+            }
+        }
+
+        private void DownloadShelfWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape)
+            {
+                DismissShelf();
+                e.Handled = true;
+            }
+        }
+
+        private void DownloadShelfWindow_Deactivated(object? sender, EventArgs e)
+        {
+            if (_isSettingsOpen) return;
+
+            if (_settingsService.CurrentSettings.AutoDismissOnDeactivate && !_isHovered && IsVisible)
+            {
+                DismissShelf();
+            }
+        }
+
+        private void Card_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is DownloadItem item)
+            {
+                _viewModel.OpenFileCommand.Execute(item);
+            }
+        }
+
+        private void ShelfScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            // Allow smooth horizontal scrolling with normal mouse wheel
+            if (sender is ScrollViewer scroller)
+            {
+                if (e.Delta < 0)
+                {
+                    scroller.ScrollToHorizontalOffset(scroller.HorizontalOffset + 60);
+                }
+                else
+                {
+                    scroller.ScrollToHorizontalOffset(scroller.HorizontalOffset - 60);
+                }
+                e.Handled = true;
+            }
+        }
+
+        private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed)
+            {
+                DragMove();
+            }
+        }
+
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            DismissShelf();
+        }
+
+        private void DismissMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            DismissShelf();
+        }
+
+        private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
+        {
+            _viewModel.OpenDownloadsFolderCommand.Execute(null);
+        }
+
+        private void SettingsButton_Click(object sender, RoutedEventArgs e)
+        {
+            OnRequestOpenSettings();
+        }
+
+        private void OnRequestOpenSettings()
+        {
+            _isSettingsOpen = true;
+            StopAutoDismiss();
+
+            var settingsWin = new SettingsWindow(_settingsService, () =>
+            {
+                _viewModel.ReloadSettings();
+            })
+            {
+                Owner = this
+            };
+
+            settingsWin.Closed += (s, e) =>
+            {
+                _isSettingsOpen = false;
+                PositionNearTaskbar();
+            };
+
+            settingsWin.ShowDialog();
+        }
+    }
+}

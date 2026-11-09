@@ -32,12 +32,17 @@ namespace MasseterDrop.Tests
             TestPhantomFilesDoNotExistOnDisk();
             TestNoTemporaryEntriesPersistedInHistory();
             TestExistingDownloadHistoryHandling();
+            TestRemovedHistoryPersistenceAndRescan();
             await TestMultipleEventsSingleTempFileAsync();
             await TestTempFileRenamedToFinalAsync();
             await TestSingleDownloadExactlyOneCompletedEntryAsync();
             await TestMultipleSimultaneousDownloadsAsync();
             await TestTempFileDeletionBeforeCompletionAsync();
             TestTaskbarPositioning();
+            TestShelfWindowPositioning();
+            await TestImageThumbnailGenerationAsync();
+            await TestPdfAndCorruptFileHandlingAsync();
+            await TestDownloadCompletedEventNotificationAsync();
 
             Console.WriteLine();
             Console.WriteLine("=================================================");
@@ -115,6 +120,42 @@ namespace MasseterDrop.Tests
             Assert("Settings MaxRecentFiles preserved", loaded.MaxRecentFiles == 200);
             Assert("Settings AutoDismissOnDeactivate preserved", loaded.AutoDismissOnDeactivate == false);
             Assert("Settings Theme preserved", loaded.Theme == "Dark");
+            Console.WriteLine();
+        }
+
+        static void TestRemovedHistoryPersistenceAndRescan()
+        {
+            Console.WriteLine("-> Running Removed Recent Item Persistence Tests...");
+            string root = Path.Combine(Path.GetTempPath(), "MasseterDrop_RemovedHistory_" + Guid.NewGuid().ToString("N"));
+            string downloads = Path.Combine(root, "Downloads");
+            string state = Path.Combine(root, "State");
+            Directory.CreateDirectory(downloads);
+            string file = Path.Combine(downloads, "keep-on-disk.pdf");
+            File.WriteAllText(file, "file contents");
+
+            try
+            {
+                var service = new DownloadHistoryService(state);
+                var firstLoad = service.LoadHistory(downloads);
+                Assert("Existing file appears before removal", firstLoad.Any(i => i.FullPath == file));
+                service.RemoveFromHistory(file, firstLoad.Where(i => i.FullPath != file));
+
+                // A new service instance represents an application restart.
+                var afterRestart = new DownloadHistoryService(state).LoadHistory(downloads);
+                Assert("Removed file stays out after history reload", !afterRestart.Any(i => i.FullPath == file));
+                Assert("Removing history leaves the real file intact", File.Exists(file));
+
+                service.ClearRemovedItems();
+                Assert("Explicit refresh can rediscover the file", service.LoadHistory(downloads).Any(i => i.FullPath == file));
+
+                service.RemoveFromHistory(file, Array.Empty<DownloadItem>());
+                service.MarkDownloaded(file);
+                Assert("A new completion at the same path restores the item", service.LoadHistory(downloads).Any(i => i.FullPath == file));
+            }
+            finally
+            {
+                try { Directory.Delete(root, true); } catch { }
+            }
             Console.WriteLine();
         }
 
@@ -544,6 +585,135 @@ namespace MasseterDrop.Tests
             Assert("Panel position Right is <= WorkArea Right", pos.X + 380 <= workArea.Right + 5, $"Right: {pos.X + 380}, WorkArea.Right: {workArea.Right}");
             Assert("Panel position Top is >= WorkArea Top", pos.Y >= workArea.Top, $"Top: {pos.Y}, WorkArea.Top: {workArea.Top}");
             Assert("Panel position Bottom is <= WorkArea Bottom", pos.Y + 520 <= workArea.Bottom + 5, $"Bottom: {pos.Y + 520}, WorkArea.Bottom: {workArea.Bottom}");
+            Console.WriteLine();
+        }
+
+        static void TestShelfWindowPositioning()
+        {
+            Console.WriteLine("-> Running Download Shelf Positioning Tests (490x216)...");
+            const double shelfWidth = 490;
+            const double shelfHeight = 216;
+
+            var pos = TaskbarService.CalculatePanelPosition(shelfWidth, shelfHeight);
+            var workArea = SystemParameters.WorkArea;
+
+            Assert("Shelf Left >= WorkArea Left", pos.X >= workArea.Left, $"Left: {pos.X}");
+            Assert("Shelf Right <= WorkArea Right", pos.X + shelfWidth <= workArea.Right + 5, $"Right: {pos.X + shelfWidth}, WorkArea.Right: {workArea.Right}");
+            Assert("Shelf Top >= WorkArea Top", pos.Y >= workArea.Top, $"Top: {pos.Y}");
+            Assert("Shelf Bottom <= WorkArea Bottom", pos.Y + shelfHeight <= workArea.Bottom + 5, $"Bottom: {pos.Y + shelfHeight}, WorkArea.Bottom: {workArea.Bottom}");
+            Console.WriteLine();
+        }
+
+        static async Task TestImageThumbnailGenerationAsync()
+        {
+            Console.WriteLine("-> Running Image Thumbnail Generation Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_ThumbTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+            string imagePath = Path.Combine(testDir, "sample_preview.png");
+
+            try
+            {
+                // Create a real PNG image using System.Drawing
+                using (var bmp = new System.Drawing.Bitmap(120, 80))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(bmp))
+                    {
+                        g.Clear(System.Drawing.Color.MediumSlateBlue);
+                    }
+                    bmp.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
+                }
+
+                var thumb = await ThumbnailService.GetThumbnailAsync(imagePath, 256);
+                Assert("Generated image thumbnail is not null", thumb != null);
+                Assert("Thumbnail is a valid BitmapSource", thumb is System.Windows.Media.Imaging.BitmapSource);
+
+                if (thumb is System.Windows.Media.Imaging.BitmapSource bs)
+                {
+                    Assert("Thumbnail has positive pixel dimensions", bs.PixelWidth > 0 && bs.PixelHeight > 0, $"{bs.PixelWidth}x{bs.PixelHeight}");
+                    Assert("Thumbnail is frozen for thread safety", bs.IsFrozen);
+                }
+
+                // Caching test
+                var cachedThumb = await ThumbnailService.GetThumbnailAsync(imagePath, 256);
+                Assert("Second request retrieves cached instance", ReferenceEquals(thumb, cachedThumb));
+
+                ThumbnailService.InvalidateCache(imagePath);
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static async Task TestPdfAndCorruptFileHandlingAsync()
+        {
+            Console.WriteLine("-> Running PDF & Corrupted File Thumbnail Resilience Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_CorruptTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+            string corruptPath = Path.Combine(testDir, "corrupted.jpg");
+            File.WriteAllBytes(corruptPath, new byte[] { 0x00, 0x01, 0x02 }); // Invalid image bytes
+            string nonExistentPath = Path.Combine(testDir, "ghost.pdf");
+
+            try
+            {
+                var nonExistentThumb = await ThumbnailService.GetThumbnailAsync(nonExistentPath, 256);
+                Assert("Non-existent file gracefully returns null without throwing", nonExistentThumb == null);
+
+                var corruptThumb = await ThumbnailService.GetThumbnailAsync(corruptPath, 256);
+                // Should not throw, may return null or fallback icon
+                Assert("Corrupted image handled safely without crashing", true);
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static async Task TestDownloadCompletedEventNotificationAsync()
+        {
+            Console.WriteLine("-> Running DownloadCompletedEvent Notification Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_EventTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+
+            var settingsService = new SettingsService();
+            settingsService.CurrentSettings.CustomDownloadsFolder = testDir;
+
+            var historyService = new DownloadHistoryService(testDir);
+            var fileOpService = new FileOperationService();
+
+            var vm = new DownloadsViewModel(settingsService, historyService, fileOpService);
+            DownloadItem? receivedItem = null;
+            var tcs = new TaskCompletionSource<DownloadItem>();
+
+            vm.FileCompletedEvent += item =>
+            {
+                receivedItem = item;
+                tcs.TrySetResult(item);
+            };
+
+            try
+            {
+                // Create a real completed file via atomic rename (mimicking browser)
+                string tempFile = Path.Combine(testDir, "snapshot.png.crdownload");
+                string finalFile = Path.Combine(testDir, "snapshot.png");
+
+                File.WriteAllText(tempFile, "PNG image bytes simulation");
+                await Task.Delay(200);
+
+                File.Move(tempFile, finalFile);
+
+                var completed = await Task.WhenAny(tcs.Task, Task.Delay(4000));
+                Assert("FileCompletedEvent fired upon completion", completed == tcs.Task);
+                Assert("Received item matches final filename", receivedItem != null && receivedItem.FileName == "snapshot.png");
+                Assert("Received item marked as IsJustDownloaded", receivedItem != null && receivedItem.IsJustDownloaded);
+            }
+            finally
+            {
+                vm.Dispose();
+                try { Directory.Delete(testDir, true); } catch { }
+            }
             Console.WriteLine();
         }
     }

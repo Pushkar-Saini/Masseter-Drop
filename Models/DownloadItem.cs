@@ -136,6 +136,18 @@ namespace MasseterDrop.Models
             _ => _isAvailable ? "Ready" : "Missing"
         };
 
+        private bool _isJustDownloaded = false;
+
+        [JsonIgnore]
+        public bool IsJustDownloaded
+        {
+            get => _isJustDownloaded;
+            set => SetField(ref _isJustDownloaded, value);
+        }
+
+        [JsonIgnore]
+        public bool HasPreview => _thumbnail != null;
+
         [JsonIgnore]
         public ImageSource? Thumbnail
         {
@@ -148,22 +160,52 @@ namespace MasseterDrop.Models
                 }
                 return _thumbnail;
             }
-            set => SetField(ref _thumbnail, value);
+            set
+            {
+                if (SetField(ref _thumbnail, value))
+                {
+                    OnPropertyChanged(nameof(HasPreview));
+                }
+            }
         }
 
         public void LoadThumbnail()
         {
             try
             {
-                if (!string.IsNullOrEmpty(_fullPath))
+                if (string.IsNullOrEmpty(_fullPath))
+                    return;
+
+                // Load high-resolution thumbnail asynchronously without blocking UI.
+                // If a real preview is not available (e.g. ZIP, EXE), Thumbnail remains null
+                // and the UI cleanly falls back to the category icon.
+                System.Threading.Tasks.Task.Run(async () =>
                 {
-                    _thumbnail = NativeMethods.GetFileIcon(_fullPath, true);
-                    OnPropertyChanged(nameof(Thumbnail));
-                }
+                    try
+                    {
+                        var thumb = await Services.ThumbnailService.GetThumbnailAsync(_fullPath, 256);
+                        if (thumb != null)
+                        {
+                            var app = System.Windows.Application.Current;
+                            if (app?.Dispatcher != null && !app.Dispatcher.HasShutdownStarted)
+                            {
+                                app.Dispatcher.Invoke(() =>
+                                {
+                                    Thumbnail = thumb;
+                                });
+                            }
+                            else
+                            {
+                                Thumbnail = thumb;
+                            }
+                        }
+                    }
+                    catch { }
+                });
             }
             catch
             {
-                _thumbnail = null;
+                Thumbnail = null;
             }
         }
 

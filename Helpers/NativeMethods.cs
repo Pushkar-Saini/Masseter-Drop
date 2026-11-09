@@ -143,7 +143,218 @@ namespace MasseterDrop.Helpers
 
         #endregion
 
-        #region Shell File Icons
+        #region Window Styles & Non-Activating Display
+
+        public const int GWL_EXSTYLE = -20;
+        public const int WS_EX_NOACTIVATE = 0x08000000;
+        public const int WS_EX_TOOLWINDOW = 0x00000080;
+        public const int WS_EX_TOPMOST = 0x00000008;
+
+        public const int SW_HIDE = 0;
+        public const int SW_SHOWNOACTIVATE = 4;
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+        private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        public static int GetWindowLong(IntPtr hWnd, int nIndex)
+        {
+            return IntPtr.Size == 8
+                ? unchecked((int)GetWindowLongPtr64(hWnd, nIndex).ToInt64())
+                : GetWindowLong32(hWnd, nIndex);
+        }
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        public static int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong)
+        {
+            return IntPtr.Size == 8
+                ? unchecked((int)SetWindowLongPtr64(hWnd, nIndex, new IntPtr(dwNewLong)).ToInt64())
+                : SetWindowLong32(hWnd, nIndex, dwNewLong);
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        public static void SetNonActivatingToolWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            try
+            {
+                int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+                SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST);
+            }
+            catch { }
+        }
+
+        #endregion
+
+        #region Acrylic & Glassmorphism Blur
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AccentPolicy
+        {
+            public AccentState AccentState;
+            public int AccentFlags;
+            public int GradientColor;
+            public int AnimationId;
+        }
+
+        public enum AccentState
+        {
+            ACCENT_DISABLED = 0,
+            ACCENT_ENABLE_GRADIENT = 1,
+            ACCENT_ENABLE_TRANSPARENTGRADIENT = 2,
+            ACCENT_ENABLE_BLURBEHIND = 3,
+            ACCENT_ENABLE_ACRYLICBLURBEHIND = 4,
+            ACCENT_INVALID_STATE = 5
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WindowCompositionAttributeData
+        {
+            public WindowCompositionAttribute Attribute;
+            public IntPtr Data;
+            public int SizeOfData;
+        }
+
+        public enum WindowCompositionAttribute
+        {
+            WCA_ACCENT_POLICY = 19
+        }
+
+        [DllImport("user32.dll")]
+        public static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+        public static void EnableAcrylicBlur(IntPtr hwnd, uint gradientColor = 0x60121620)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            try
+            {
+                var accent = new AccentPolicy
+                {
+                    AccentState = AccentState.ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                    AccentFlags = 2,
+                    GradientColor = (int)gradientColor
+                };
+
+                int accentSize = Marshal.SizeOf(accent);
+                IntPtr accentPtr = Marshal.AllocHGlobal(accentSize);
+                try
+                {
+                    Marshal.StructureToPtr(accent, accentPtr, false);
+
+                    var data = new WindowCompositionAttributeData
+                    {
+                        Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY,
+                        Data = accentPtr,
+                        SizeOfData = accentSize
+                    };
+
+                    SetWindowCompositionAttribute(hwnd, ref data);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(accentPtr);
+                }
+            }
+            catch
+            {
+                // Graceful fallback to pure translucent WPF styling
+            }
+        }
+
+        #endregion
+
+        #region Shell File Icons & Thumbnails
+
+        [ComImport]
+        [Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        public interface IShellItemImageFactory
+        {
+            [PreserveSig]
+            int GetImage(
+                [In, MarshalAs(UnmanagedType.Struct)] SIZE size,
+                [In] SIIGBF flags,
+                [Out] out IntPtr phbm);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SIZE
+        {
+            public int cx;
+            public int cy;
+            public SIZE(int cx, int cy) { this.cx = cx; this.cy = cy; }
+        }
+
+        [Flags]
+        public enum SIIGBF
+        {
+            SIIGBF_RESIZETOFIT = 0x00,
+            SIIGBF_BIGGERSIZEOK = 0x01,
+            SIIGBF_MEMORYONLY = 0x02,
+            SIIGBF_ICONONLY = 0x04,
+            SIIGBF_THUMBNAILONLY = 0x08,
+            SIIGBF_INCACHEONLY = 0x10
+        }
+
+        private static readonly Guid IShellItemImageFactoryGuid = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern int SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string pszPath,
+            IntPtr pbc,
+            [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
+            out IShellItemImageFactory ppv);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeleteObject(IntPtr hObject);
+
+        public static ImageSource? GetShellThumbnail(string filePath, int targetSize = 256)
+        {
+            try
+            {
+                if (!File.Exists(filePath)) return null;
+
+                int hr = SHCreateItemFromParsingName(filePath, IntPtr.Zero, IShellItemImageFactoryGuid, out IShellItemImageFactory factory);
+                if (hr == 0 && factory != null)
+                {
+                    var size = new SIZE(targetSize, targetSize);
+                    hr = factory.GetImage(size, SIIGBF.SIIGBF_THUMBNAILONLY | SIIGBF.SIIGBF_BIGGERSIZEOK, out IntPtr hBitmap);
+                    if (hr == 0 && hBitmap != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            var source = Imaging.CreateBitmapSourceFromHBitmap(
+                                hBitmap,
+                                IntPtr.Zero,
+                                Int32Rect.Empty,
+                                BitmapSizeOptions.FromEmptyOptions());
+                            source.Freeze();
+                            return source;
+                        }
+                        finally
+                        {
+                            DeleteObject(hBitmap);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Graceful fallback to null
+            }
+            return null;
+        }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         public struct SHFILEINFO

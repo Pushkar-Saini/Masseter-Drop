@@ -43,7 +43,7 @@ namespace MasseterDrop.Services
                     Process.Start(new ProcessStartInfo
                     {
                         FileName = "rundll32.exe",
-                        Arguments = $"shell32.dll,OpenAs_RunDLL {filePath}",
+                        Arguments = $"shell32.dll,OpenAs_RunDLL \"{filePath}\"",
                         UseShellExecute = true
                     });
                     return true;

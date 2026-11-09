@@ -35,7 +35,7 @@ namespace MasseterDrop.Views
 
         private void DownloadsPanel_Loaded(object sender, RoutedEventArgs e)
         {
-            NativeMethods.ApplyModernWindowStyle(this, isDarkMode: true);
+            ThemeService.Apply(this, _settingsService.CurrentSettings.Theme);
             PositionNearTaskbar();
         }
 
@@ -138,6 +138,7 @@ namespace MasseterDrop.Views
             _isSettingsOpen = true;
             var settingsWin = new SettingsWindow(_settingsService, () =>
             {
+                ThemeService.Apply(this, _settingsService.CurrentSettings.Theme);
                 _viewModel.ReloadSettings();
             })
             {

@@ -10,18 +10,89 @@ namespace MasseterDrop.Services
 {
     public class DownloadHistoryService
     {
-        private static readonly string StorageDirectory = Path.Combine(
+        private readonly string StorageDirectory;
+
+        private readonly string HistoryFilePath;
+        private readonly string RemovedItemsFilePath;
+        private readonly object _lock = new object();
+
+        public DownloadHistoryService(string? storageDirectory = null)
+        {
+            StorageDirectory = storageDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MasseterDrop");
+            HistoryFilePath = Path.Combine(StorageDirectory, "history.json");
+            RemovedItemsFilePath = Path.Combine(StorageDirectory, "removed-items.json");
+        }
 
-        private static readonly string HistoryFilePath = Path.Combine(StorageDirectory, "history.json");
-        private readonly object _lock = new object();
+        public void RemoveFromHistory(string fullPath, IEnumerable<DownloadItem> remainingItems, int maxItems = 100)
+        {
+            lock (_lock)
+            {
+                var removed = LoadRemovedItems();
+                removed.Add(Path.GetFullPath(fullPath));
+                try
+                {
+                    Directory.CreateDirectory(StorageDirectory);
+                    File.WriteAllText(RemovedItemsFilePath, JsonSerializer.Serialize(removed, new JsonSerializerOptions { WriteIndented = true }));
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to save removed download history: {ex.Message}");
+                }
+                SaveHistory(remainingItems, maxItems);
+            }
+        }
+
+        public void ClearRemovedItems()
+        {
+            lock (_lock)
+            {
+                try { if (File.Exists(RemovedItemsFilePath)) File.Delete(RemovedItemsFilePath); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to clear removed download history: {ex.Message}"); }
+            }
+        }
+
+        public void MarkDownloaded(string fullPath)
+        {
+            lock (_lock)
+            {
+                var removed = LoadRemovedItems();
+                if (removed.Remove(Path.GetFullPath(fullPath)) && removed.Count == 0)
+                {
+                    try { if (File.Exists(RemovedItemsFilePath)) File.Delete(RemovedItemsFilePath); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to update removed download history: {ex.Message}"); }
+                }
+                else if (removed.Count > 0)
+                {
+                    try { File.WriteAllText(RemovedItemsFilePath, JsonSerializer.Serialize(removed, new JsonSerializerOptions { WriteIndented = true })); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to update removed download history: {ex.Message}"); }
+                }
+            }
+        }
+
+        private HashSet<string> LoadRemovedItems()
+        {
+            try
+            {
+                if (File.Exists(RemovedItemsFilePath))
+                {
+                    var loaded = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(RemovedItemsFilePath));
+                    return loaded == null
+                        ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                        : new HashSet<string>(loaded, StringComparer.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Failed to load removed download history: {ex.Message}"); }
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
 
         public List<DownloadItem> LoadHistory(string downloadsDirectory, int maxItems = 100)
         {
             lock (_lock)
             {
                 var itemsMap = new Dictionary<string, DownloadItem>(StringComparer.OrdinalIgnoreCase);
+                var removedItems = LoadRemovedItems();
 
                 // 1. Try to load saved history, purging any phantom or temporary items
                 try
@@ -38,7 +109,7 @@ namespace MasseterDrop.Services
                                     !DownloadPathHelper.IsTemporaryOrPhantom(item.FullPath) &&
                                     !DownloadPathHelper.IsTemporaryOrPhantom(item.FileName) &&
                                     item.Status == DownloadStatus.Completed &&
-                                    File.Exists(item.FullPath))
+                                    File.Exists(item.FullPath) && !removedItems.Contains(Path.GetFullPath(item.FullPath)))
                                 {
                                     item.IsAvailable = true;
                                     if (item.FileSize == 0)
@@ -75,7 +146,7 @@ namespace MasseterDrop.Services
 
                         foreach (var fi in diskFiles)
                         {
-                            if (!itemsMap.ContainsKey(fi.FullName))
+                            if (!itemsMap.ContainsKey(fi.FullName) && !removedItems.Contains(Path.GetFullPath(fi.FullName)))
                             {
                                 itemsMap[fi.FullName] = DownloadItem.FromFileInfo(fi);
                             }

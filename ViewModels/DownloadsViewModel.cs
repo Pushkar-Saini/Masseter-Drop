@@ -32,6 +32,7 @@ namespace MasseterDrop.ViewModels
         public ICollectionView FilteredDownloads => _filteredDownloadsView;
 
         public event Action? RequestOpenSettings;
+        public event Action<DownloadItem>? FileCompletedEvent;
 
         public string SearchText
         {
@@ -231,6 +232,9 @@ namespace MasseterDrop.ViewModels
                 return;
             }
 
+            // A genuinely new completion at this path makes a prior removal obsolete.
+            _historyService.MarkDownloaded(item.FullPath);
+
             RunOnUIThread(() =>
             {
                 lock (_collectionLock)
@@ -244,18 +248,23 @@ namespace MasseterDrop.ViewModels
                         string.Equals(d.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase) ||
                         (d.IsDownloading && string.Equals(d.FileName, item.FileName, StringComparison.OrdinalIgnoreCase)));
 
+                    DownloadItem completedItem;
                     if (existing != null)
                     {
                         existing.UpdateFrom(item);
+                        existing.IsJustDownloaded = true;
                         int idx = _downloads.IndexOf(existing);
                         if (idx > 0)
                         {
                             _downloads.Move(idx, 0);
                         }
+                        completedItem = existing;
                     }
                     else
                     {
+                        item.IsJustDownloaded = true;
                         _downloads.Insert(0, item);
+                        completedItem = item;
                     }
 
                     // Enforce max count
@@ -266,6 +275,7 @@ namespace MasseterDrop.ViewModels
 
                     UpdateCounts();
                     _historyService.SaveHistory(_downloads, _settingsService.CurrentSettings.MaxRecentFiles);
+                    FileCompletedEvent?.Invoke(completedItem);
                 }
             });
         }
@@ -372,6 +382,9 @@ namespace MasseterDrop.ViewModels
 
         private void ExecuteRefresh()
         {
+            // Refresh is the user's explicit request to rescan disk, including older files
+            // previously hidden by Remove from Recent List.
+            _historyService.ClearRemovedItems();
             InitializeData();
             ShowToast("Downloads refreshed");
         }
@@ -446,7 +459,7 @@ namespace MasseterDrop.ViewModels
             OnPropertyChanged(nameof(TotalCountDisplay));
             OnPropertyChanged(nameof(FilteredCountDisplay));
 
-            _historyService.SaveHistory(_downloads, _settingsService.CurrentSettings.MaxRecentFiles);
+            _historyService.RemoveFromHistory(item.FullPath, _downloads, _settingsService.CurrentSettings.MaxRecentFiles);
             ShowToast("Removed from recent list");
         }
 

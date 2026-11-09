@@ -23,7 +23,7 @@ namespace MasseterDrop
         private FileOperationService? _fileOperationService;
         private TaskbarService? _taskbarService;
         private DownloadsViewModel? _downloadsViewModel;
-        private DownloadsPanel? _downloadsPanel;
+        private DownloadShelfWindow? _shelfWindow;
         private Forms.NotifyIcon? _notifyIcon;
 
         [STAThread]
@@ -71,9 +71,9 @@ namespace MasseterDrop
             _taskbarService.ActivationRequested += OnActivationRequested;
             _taskbarService.StartSingleInstanceServer();
 
-            // 5. Initialize ViewModels and Main Panel
+            // 5. Initialize ViewModels and Main Shelf Window
             _downloadsViewModel = new DownloadsViewModel(_settingsService, _historyService, _fileOperationService);
-            _downloadsPanel = new DownloadsPanel(_settingsService, _downloadsViewModel);
+            _shelfWindow = new DownloadShelfWindow(_settingsService, _downloadsViewModel);
 
             // 6. Setup System Tray Icon
             SetupNotifyIcon();
@@ -84,7 +84,7 @@ namespace MasseterDrop
 
             if (!startMinimized)
             {
-                _downloadsPanel.ShowPanel();
+                _shelfWindow.ShowManual();
             }
         }
 
@@ -112,11 +112,11 @@ namespace MasseterDrop
                 // Context Menu
                 var contextMenu = new Forms.ContextMenuStrip();
 
-                var itemPanel = new Forms.ToolStripMenuItem("Downloads Panel")
+                var itemPanel = new Forms.ToolStripMenuItem("Download Shelf")
                 {
                     Font = new Font(contextMenu.Font, System.Drawing.FontStyle.Bold)
                 };
-                itemPanel.Click += (s, e) => _downloadsPanel?.TogglePanel();
+                itemPanel.Click += (s, e) => _shelfWindow?.ToggleShelf();
 
                 var itemFolder = new Forms.ToolStripMenuItem("Open Downloads Folder");
                 itemFolder.Click += (s, e) =>
@@ -128,7 +128,7 @@ namespace MasseterDrop
                 var itemSettings = new Forms.ToolStripMenuItem("Settings...");
                 itemSettings.Click += (s, e) =>
                 {
-                    _downloadsPanel?.ShowPanel();
+                    _shelfWindow?.ShowManual();
                     _downloadsViewModel?.OpenSettingsCommand.Execute(null);
                 };
 
@@ -143,12 +143,12 @@ namespace MasseterDrop
 
                 _notifyIcon.ContextMenuStrip = contextMenu;
 
-                // Left click toggles panel
+                // Left click toggles shelf
                 _notifyIcon.MouseClick += (s, e) =>
                 {
                     if (e.Button == Forms.MouseButtons.Left)
                     {
-                        _downloadsPanel?.TogglePanel();
+                        _shelfWindow?.ToggleShelf();
                     }
                 };
             }
@@ -162,7 +162,7 @@ namespace MasseterDrop
         {
             Dispatcher.Invoke(() =>
             {
-                _downloadsPanel?.TogglePanel();
+                _shelfWindow?.ToggleShelf();
             });
         }
 
@@ -174,6 +174,8 @@ namespace MasseterDrop
                 _notifyIcon.Dispose();
                 _notifyIcon = null;
             }
+
+            _shelfWindow?.Close();
 
             _downloadsViewModel?.Dispose();
             _taskbarService?.Dispose();
