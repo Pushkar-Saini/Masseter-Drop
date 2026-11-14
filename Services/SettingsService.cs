@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Text.Json;
-using Microsoft.Win32;
 using MasseterDrop.Helpers;
 using MasseterDrop.Models;
 
@@ -9,27 +8,33 @@ namespace MasseterDrop.Services
 {
     public class SettingsService
     {
-        private static readonly string SettingsDirectory = Path.Combine(
+        private static readonly string DefaultSettingsDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MasseterDrop");
 
-        private static readonly string SettingsFilePath = Path.Combine(SettingsDirectory, "settings.json");
-        private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string AppRegistryName = "MasseterDrop";
+        private readonly string _settingsDirectory;
+        private readonly string _settingsFilePath;
 
         public AppSettings CurrentSettings { get; private set; } = new AppSettings();
+
+        public SettingsService(string? customSettingsDirectory = null)
+        {
+            _settingsDirectory = customSettingsDirectory ?? DefaultSettingsDirectory;
+            _settingsFilePath = Path.Combine(_settingsDirectory, "settings.json");
+        }
 
         public AppSettings LoadSettings()
         {
             try
             {
-                if (File.Exists(SettingsFilePath))
+                if (File.Exists(_settingsFilePath))
                 {
-                    string json = File.ReadAllText(SettingsFilePath);
+                    string json = File.ReadAllText(_settingsFilePath);
                     var loaded = JsonSerializer.Deserialize<AppSettings>(json);
                     if (loaded != null)
                     {
                         CurrentSettings = loaded;
+                        EnsureInstallationId();
                         return CurrentSettings;
                     }
                 }
@@ -40,7 +45,17 @@ namespace MasseterDrop.Services
             }
 
             CurrentSettings = new AppSettings();
+            EnsureInstallationId();
             return CurrentSettings;
+        }
+
+        private void EnsureInstallationId()
+        {
+            if (string.IsNullOrWhiteSpace(CurrentSettings.AnonymousInstallationId))
+            {
+                CurrentSettings.AnonymousInstallationId = Guid.NewGuid().ToString("D");
+                SaveSettings(CurrentSettings);
+            }
         }
 
         public void SaveSettings(AppSettings settings)
@@ -48,16 +63,14 @@ namespace MasseterDrop.Services
             CurrentSettings = settings ?? throw new ArgumentNullException(nameof(settings));
             try
             {
-                if (!Directory.Exists(SettingsDirectory))
+                if (!Directory.Exists(_settingsDirectory))
                 {
-                    Directory.CreateDirectory(SettingsDirectory);
+                    Directory.CreateDirectory(_settingsDirectory);
                 }
 
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 string json = JsonSerializer.Serialize(settings, options);
-                File.WriteAllText(SettingsFilePath, json);
-
-                ApplyStartupSetting(settings.LaunchAtStartup);
+                File.WriteAllText(_settingsFilePath, json);
             }
             catch (Exception ex)
             {
@@ -76,32 +89,55 @@ namespace MasseterDrop.Services
             return NativeMethods.GetDownloadsFolderPath();
         }
 
-        private void ApplyStartupSetting(bool enable)
+        /// <summary>
+        /// Called by the user (Settings window / tray menu): turns launch-at-startup on or off,
+        /// clearing a Task Manager "Disabled" flag if they explicitly turned it back on.
+        /// </summary>
+        public bool SetLaunchAtStartup(bool enable)
         {
-            try
+            bool ok = StartupManager.SetEnabled(enable, overrideTaskManager: true);
+            if (ok || !StartupManager.CanManage)
             {
-                using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, true);
-                if (key == null) return;
-
-                if (enable)
-                {
-                    string? exePath = Environment.ProcessPath;
-                    if (!string.IsNullOrEmpty(exePath))
-                    {
-                        key.SetValue(AppRegistryName, $"\"{exePath}\" --minimized");
-                    }
-                }
-                else
-                {
-                    if (key.GetValue(AppRegistryName) != null)
-                    {
-                        key.DeleteValue(AppRegistryName, false);
-                    }
-                }
+                CurrentSettings.LaunchAtStartup = enable;
+                SaveSettings(CurrentSettings);
             }
-            catch (Exception ex)
+            return ok;
+        }
+
+        /// <summary>
+        /// Called once on every launch. Makes the registry match the saved setting:
+        ///  - first run (or first run after this feature shipped): turns startup on by default;
+        ///  - repairs the Run entry if the exe was moved/updated;
+        ///  - if the user disabled us in Task Manager, reflects that in settings instead of fighting it.
+        /// </summary>
+        public void SyncStartupRegistration()
+        {
+            if (!StartupManager.CanManage) return;
+
+            var s = CurrentSettings;
+            bool changed = false;
+
+            if (!s.StartupDefaultApplied)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to configure startup registry key: {ex.Message}");
+                s.LaunchAtStartup = true;
+                s.StartupDefaultApplied = true;
+                changed = true;
+            }
+
+            if (s.LaunchAtStartup && StartupManager.IsDisabledInTaskManager())
+            {
+                s.LaunchAtStartup = false;
+                changed = true;
+                // Leave the registry alone so Task Manager keeps showing it as "Disabled".
+            }
+            else
+            {
+                StartupManager.SetEnabled(s.LaunchAtStartup, overrideTaskManager: false);
+            }
+
+            if (changed)
+            {
+                SaveSettings(s);
             }
         }
     }

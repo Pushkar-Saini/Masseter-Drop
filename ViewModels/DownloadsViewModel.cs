@@ -18,6 +18,7 @@ namespace MasseterDrop.ViewModels
         private readonly SettingsService _settingsService;
         private readonly DownloadHistoryService _historyService;
         private readonly FileOperationService _fileOperationService;
+        private readonly IAnalyticsService? _analyticsService;
         private DownloadMonitor? _downloadMonitor;
 
         private string _searchText = string.Empty;
@@ -128,11 +129,13 @@ namespace MasseterDrop.ViewModels
         public DownloadsViewModel(
             SettingsService settingsService,
             DownloadHistoryService historyService,
-            FileOperationService fileOperationService)
+            FileOperationService fileOperationService,
+            IAnalyticsService? analyticsService = null)
         {
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _historyService = historyService ?? throw new ArgumentNullException(nameof(historyService));
             _fileOperationService = fileOperationService ?? throw new ArgumentNullException(nameof(fileOperationService));
+            _analyticsService = analyticsService;
 
             _filteredDownloadsView = CollectionViewSource.GetDefaultView(_downloads);
             _filteredDownloadsView.Filter = item => item is DownloadItem di && FilterPredicate(di);
@@ -402,7 +405,11 @@ namespace MasseterDrop.ViewModels
                 return;
             }
 
-            if (!_fileOperationService.OpenFile(item.FullPath, out string? error))
+            if (_fileOperationService.OpenFile(item.FullPath, out string? error))
+            {
+                _analyticsService?.TrackFileOpened(item.Category);
+            }
+            else
             {
                 ShowToast(error ?? "Could not open file", isError: true);
             }

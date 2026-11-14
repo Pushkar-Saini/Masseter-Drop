@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="Masseter Drop Settings"
-        Height="420" Width="460"
+        Height="470" Width="460"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -113,6 +113,16 @@
                             <CheckBox x:Name="ChkStartMinimized" Content="Start in background / minimized" Foreground="#F5F6F8" Margin="0,0,0,12" Cursor="Hand" />
                             <CheckBox x:Name="ChkKeepRunning" Content="Keep application running after closing shelf" Foreground="#F5F6F8" Margin="0,0,0,12" Cursor="Hand" />
                             <CheckBox x:Name="ChkAutoDismiss" Content="Auto-dismiss shelf when clicking outside" Foreground="#F5F6F8" Cursor="Hand" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Privacy & Analytics -->
+                    <Border Background="#22252C" CornerRadius="8" Padding="14" Margin="0,0,0,14" BorderBrush="#2B2F38" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Privacy &amp; Analytics" FontWeight="Medium" Foreground="#F5F6F8" Margin="0,0,0,4" />
+                            <TextBlock Text="Share anonymous usage statistics to help us improve Masseter Drop. We never collect your file names, paths, or contents."
+                                       FontSize="11" Foreground="#A1A6B0" TextWrapping="Wrap" LineHeight="16" Margin="0,0,0,12" />
+                            <CheckBox x:Name="ChkAnalytics" Content="Allow anonymous analytics" Foreground="#F5F6F8" Cursor="Hand" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

@@ -48,7 +48,11 @@ Running quietly in the background and pinned directly to the Windows taskbar or 
   - Automatic file availability checks on startup.
 - **Application Preferences**:
   - Configurable monitored folder (default Downloads or custom).
-  - Launch at Windows startup (Registry `HKCU\...\Run`).
+  - Launch at Windows startup — on by default. Registers `"MasseterDrop.exe" --minimized` under
+    `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (no admin needed), so the app starts silently
+    in the system tray at sign-in. Toggle it in Settings or via the tray menu's **Start with Windows**.
+    The entry is re-checked on every launch (repairs a moved exe path) and honours Task Manager's
+    Startup tab if you disable it there.
   - Start minimized in background.
   - Max recent history limit (50, 100, 200, 500).
   - Theme selection (Dark / Light / System).
@@ -123,17 +127,21 @@ dotnet build
 dotnet publish MasseterDrop.csproj -c Release -r win-x64 --self-contained false -o publish
 ```
 
-### Running the Application
-```powershell
-# Run the application directly
-dotnet run
+### Installing Masseter Drop (Windows Startup & System Tray)
+To install Masseter Drop on any Windows computer so that it **automatically turns on in the system tray on startup**:
 
-# Or launch the published executable
-.\publish\MasseterDrop.exe
+1. **One-Click Installation**:
+   - Double-click `Installer\Install.bat` (or run `powershell -ExecutionPolicy Bypass -File .\Installer\Install.ps1`).
+   - Masseter Drop installs cleanly per-user to `%LOCALAPPDATA%\Programs\Masseter Drop\`.
+   - Creates a Start Menu shortcut and configures automatic startup in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+   - Immediately starts Masseter Drop in the system tray.
 
-# To launch in background / tray mode:
-.\publish\MasseterDrop.exe --minimized
-```
+2. **Standalone / Portable Execution**:
+   - Masseter Drop features **automatic self-registration**. Simply running `MasseterDrop.exe` automatically registers `"MasseterDrop.exe" --minimized` in the Windows startup registry.
+   - On every Windows startup or sign-in, the application automatically launches in the background into the system tray.
+
+3. **To Uninstall**:
+   - Double-click `Installer\Uninstall.bat` (or run `Installer\Uninstall.ps1`) to cleanly remove the startup registry entry, shortcuts, and application files.
 
 ---
 

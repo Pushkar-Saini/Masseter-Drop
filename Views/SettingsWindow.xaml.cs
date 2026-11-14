@@ -12,13 +12,20 @@ namespace MasseterDrop.Views
     public partial class SettingsWindow : Window
     {
         private readonly SettingsService _settingsService;
+        private readonly IAnalyticsService? _analyticsService;
         private readonly Action _onSettingsSaved;
 
         public SettingsWindow(SettingsService settingsService, Action onSettingsSaved)
+            : this(settingsService, onSettingsSaved, null)
+        {
+        }
+
+        public SettingsWindow(SettingsService settingsService, Action onSettingsSaved, IAnalyticsService? analyticsService)
         {
             InitializeComponent();
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _onSettingsSaved = onSettingsSaved ?? throw new ArgumentNullException(nameof(onSettingsSaved));
+            _analyticsService = analyticsService;
 
             Loaded += SettingsWindow_Loaded;
             LoadCurrentValues();
@@ -34,10 +41,11 @@ namespace MasseterDrop.Views
             var s = _settingsService.CurrentSettings;
 
             TxtFolderPath.Text = _settingsService.GetEffectiveDownloadsPath();
-            ChkStartup.IsChecked = s.LaunchAtStartup;
+            ChkStartup.IsChecked = StartupManager.CanManage ? StartupManager.IsEnabled() : s.LaunchAtStartup;
             ChkStartMinimized.IsChecked = s.StartMinimized;
             ChkKeepRunning.IsChecked = s.KeepRunningOnClose;
             ChkAutoDismiss.IsChecked = s.AutoDismissOnDeactivate;
+            ChkAnalytics.IsChecked = s.AnalyticsConsent == true;
         }
 
         private void BrowseFolder_Click(object sender, RoutedEventArgs e)
@@ -81,16 +89,35 @@ namespace MasseterDrop.Views
                 s.CustomDownloadsFolder = selectedFolder;
             }
 
-            s.LaunchAtStartup = ChkStartup.IsChecked == true;
+            bool launchAtStartup = ChkStartup.IsChecked == true;
+            s.LaunchAtStartup = launchAtStartup;
             s.StartMinimized = ChkStartMinimized.IsChecked == true;
             s.KeepRunningOnClose = ChkKeepRunning.IsChecked == true;
             s.AutoDismissOnDeactivate = ChkAutoDismiss.IsChecked == true;
+
+            bool analyticsConsent = ChkAnalytics.IsChecked == true;
+            bool consentChanged = s.AnalyticsConsent != analyticsConsent;
+            s.AnalyticsConsent = analyticsConsent;
 
             // Sensible internal defaults
             s.MaxRecentFiles = 100;
             s.Theme = "Dark";
 
+            bool startupOk = _settingsService.SetLaunchAtStartup(launchAtStartup);
             _settingsService.SaveSettings(s);
+
+            if (consentChanged)
+            {
+                _analyticsService?.SetConsent(analyticsConsent);
+            }
+
+            if (!startupOk && StartupManager.CanManage)
+            {
+                MessageBox.Show(
+                    "Masseter Drop couldn't update the Windows startup setting. Your other settings were saved.",
+                    "Masseter Drop", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
             _onSettingsSaved();
 
             Close();

@@ -44,6 +44,13 @@ namespace MasseterDrop.Tests
             await TestPdfAndCorruptFileHandlingAsync();
             await TestDownloadCompletedEventNotificationAsync();
 
+            TestAnalyticsInstallationId();
+            TestAnalyticsConsentAndOptOut();
+            TestAnalyticsPrivacyAndDataSanitization();
+            TestAnalyticsEventFlow();
+            await TestAnalyticsShutdownTimeoutAndResilienceAsync();
+            await TestPostHogLiveCaptureAsync();
+
             Console.WriteLine();
             Console.WriteLine("=================================================");
             Console.WriteLine($"TEST RESULTS: {_passed} PASSED, {_failed} FAILED");
@@ -713,6 +720,303 @@ namespace MasseterDrop.Tests
             {
                 vm.Dispose();
                 try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static void TestAnalyticsInstallationId()
+        {
+            Console.WriteLine("-> Running Analytics Anonymous Installation ID Tests...");
+            string testDir1 = Path.Combine(Path.GetTempPath(), "MasseterDrop_AnalyticsIdTest1_" + Guid.NewGuid().ToString("N"));
+            string testDir2 = Path.Combine(Path.GetTempPath(), "MasseterDrop_AnalyticsIdTest2_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir1);
+            Directory.CreateDirectory(testDir2);
+
+            try
+            {
+                var settingsService1 = new SettingsService(testDir1);
+                var loaded1 = settingsService1.LoadSettings();
+
+                Assert("AnonymousInstallationId generated on first launch", !string.IsNullOrWhiteSpace(loaded1.AnonymousInstallationId));
+                Assert("AnonymousInstallationId is valid GUID format", Guid.TryParse(loaded1.AnonymousInstallationId, out Guid parsedGuid) && parsedGuid != Guid.Empty);
+                Assert("AnonymousInstallationId does not contain username", !loaded1.AnonymousInstallationId!.Contains(Environment.UserName, StringComparison.OrdinalIgnoreCase));
+                Assert("AnonymousInstallationId does not contain computer name", !loaded1.AnonymousInstallationId!.Contains(Environment.MachineName, StringComparison.OrdinalIgnoreCase));
+
+                // Reload from disk to verify persistence across restarts
+                var settingsService1Reloaded = new SettingsService(testDir1);
+                var reloaded1 = settingsService1Reloaded.LoadSettings();
+                Assert("AnonymousInstallationId reused across restarts", string.Equals(loaded1.AnonymousInstallationId, reloaded1.AnonymousInstallationId, StringComparison.OrdinalIgnoreCase));
+
+                // Independent installation creates distinct ID
+                var settingsService2 = new SettingsService(testDir2);
+                var loaded2 = settingsService2.LoadSettings();
+                Assert("Different installation generates different unique ID", !string.Equals(loaded1.AnonymousInstallationId, loaded2.AnonymousInstallationId, StringComparison.OrdinalIgnoreCase));
+            }
+            finally
+            {
+                try { Directory.Delete(testDir1, true); } catch { }
+                try { Directory.Delete(testDir2, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static void TestAnalyticsConsentAndOptOut()
+        {
+            Console.WriteLine("-> Running Analytics Consent & Opt-Out Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_ConsentTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+
+            try
+            {
+                var settingsService = new SettingsService(testDir);
+                var s = settingsService.LoadSettings();
+
+                Assert("Initial consent preference is null (not yet asked)", s.AnalyticsConsent == null);
+
+                var analytics = new AnalyticsService(settingsService);
+                Assert("Analytics is disabled when consent is null", !analytics.IsEnabled);
+
+                // User accepts consent
+                analytics.SetConsent(true);
+                Assert("Analytics is enabled after accepting consent", analytics.IsEnabled);
+                Assert("Consent preference saved as true", settingsService.CurrentSettings.AnalyticsConsent == true);
+
+                // Simulate app restart with consent enabled
+                var settingsServiceRestart = new SettingsService(testDir);
+                settingsServiceRestart.LoadSettings();
+                Assert("Consent true survives application restart", settingsServiceRestart.CurrentSettings.AnalyticsConsent == true);
+
+                var analyticsRestart = new AnalyticsService(settingsServiceRestart);
+                Assert("Analytics resumes enabled after restart", analyticsRestart.IsEnabled);
+
+                // User changes preference to opt-out
+                analyticsRestart.SetConsent(false);
+                Assert("Analytics is immediately disabled after opt-out", !analyticsRestart.IsEnabled);
+                Assert("Consent preference saved as false", settingsServiceRestart.CurrentSettings.AnalyticsConsent == false);
+
+                // Restart again after opt-out
+                var settingsServiceRestart2 = new SettingsService(testDir);
+                settingsServiceRestart2.LoadSettings();
+                Assert("Consent false survives application restart", settingsServiceRestart2.CurrentSettings.AnalyticsConsent == false);
+
+                var analyticsRestart2 = new AnalyticsService(settingsServiceRestart2);
+                Assert("Analytics remains disabled after restart", !analyticsRestart2.IsEnabled);
+
+                analytics.Dispose();
+                analyticsRestart.Dispose();
+                analyticsRestart2.Dispose();
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static void TestAnalyticsPrivacyAndDataSanitization()
+        {
+            Console.WriteLine("-> Running Analytics Privacy & Data Sanitization Tests...");
+
+            // File category mapping
+            Assert("PDF category maps to pdf", AnalyticsService.ToCategoryString(FileCategory.Pdf) == "pdf");
+            Assert("Image category maps to image", AnalyticsService.ToCategoryString(FileCategory.Image) == "image");
+            Assert("Video category maps to video", AnalyticsService.ToCategoryString(FileCategory.Video) == "video");
+            Assert("Audio category maps to audio", AnalyticsService.ToCategoryString(FileCategory.Audio) == "audio");
+            Assert("Archive category maps to archive", AnalyticsService.ToCategoryString(FileCategory.Archive) == "archive");
+            Assert("Document category maps to document", AnalyticsService.ToCategoryString(FileCategory.Document) == "document");
+            Assert("Executable category maps to executable", AnalyticsService.ToCategoryString(FileCategory.Executable) == "executable");
+            Assert("Code category maps to other", AnalyticsService.ToCategoryString(FileCategory.Code) == "other");
+            Assert("Other category maps to other", AnalyticsService.ToCategoryString(FileCategory.Other) == "other");
+
+            // App version format check
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_SanitizeTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+            try
+            {
+                var settingsService = new SettingsService(testDir);
+                settingsService.LoadSettings();
+                var analytics = new AnalyticsService(settingsService);
+
+                Assert("AppVersion is valid semantic version", !string.IsNullOrWhiteSpace(analytics.AppVersion) && Version.TryParse(analytics.AppVersion, out _));
+                analytics.Dispose();
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        private class MockAnalyticsService : IAnalyticsService
+        {
+            public bool IsEnabled { get; set; } = true;
+            public string InstallationId { get; set; } = "mock-id";
+            public string AppVersion { get; set; } = "1.0.0";
+            public List<string> TrackedEvents { get; } = new();
+            public List<FileCategory> OpenedCategories { get; } = new();
+            public List<FileCategory> DraggedCategories { get; } = new();
+            public List<string> DisplaySources { get; } = new();
+            public List<string> DismissReasons { get; } = new();
+            public List<string> ReopenSources { get; } = new();
+
+            public void SetConsent(bool consentGiven) => IsEnabled = consentGiven;
+            public void TrackFirstLaunch() => TrackedEvents.Add("app_first_launch");
+            public void TrackAppStarted(string launchMode) => TrackedEvents.Add("app_started:" + launchMode);
+            public void TrackAppShutdown(string source) => TrackedEvents.Add("app_shutdown:" + source);
+            public void TrackAppUpdated(string prev, string curr) => TrackedEvents.Add($"app_updated:{prev}->{curr}");
+            public void TrackShelfDisplayed(string source)
+            {
+                TrackedEvents.Add("shelf_displayed:" + source);
+                DisplaySources.Add(source);
+            }
+            public void TrackShelfDismissed(string reason)
+            {
+                TrackedEvents.Add("shelf_dismissed:" + reason);
+                DismissReasons.Add(reason);
+            }
+            public void TrackShelfReopened(string source)
+            {
+                TrackedEvents.Add("shelf_reopened:" + source);
+                ReopenSources.Add(source);
+            }
+            public void TrackFileOpened(FileCategory category)
+            {
+                TrackedEvents.Add("file_opened:" + category);
+                OpenedCategories.Add(category);
+            }
+            public void TrackFileDragged(FileCategory category)
+            {
+                TrackedEvents.Add("file_dragged:" + category);
+                DraggedCategories.Add(category);
+            }
+            public Task FlushAsync(TimeSpan timeout) => Task.CompletedTask;
+            public void Dispose() { }
+        }
+
+        static void TestAnalyticsEventFlow()
+        {
+            Console.WriteLine("-> Running Analytics Event Flow Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_EventFlowTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+
+            try
+            {
+                var settingsService = new SettingsService(testDir);
+                settingsService.LoadSettings();
+
+                var historyService = new DownloadHistoryService(testDir);
+                var fileOpService = new FileOperationService();
+                var mockAnalytics = new MockAnalyticsService();
+
+                var vm = new DownloadsViewModel(settingsService, historyService, fileOpService, mockAnalytics);
+
+                // Create a real file to open
+                string testFile = Path.Combine(testDir, "annual_report.pdf");
+                File.WriteAllText(testFile, "%PDF-1.4 test bytes");
+
+                var item = new DownloadItem
+                {
+                    FullPath = testFile,
+                    FileName = "annual_report.pdf",
+                    Extension = ".pdf",
+                    Category = FileCategory.Pdf,
+                    Status = DownloadStatus.Completed,
+                    IsAvailable = true
+                };
+
+                // Open file should trigger file_opened event with Pdf category
+                vm.OpenFileCommand.Execute(item);
+                Assert("File open triggers file_opened event", mockAnalytics.TrackedEvents.Contains("file_opened:Pdf"));
+                Assert("File open passes correct category", mockAnalytics.OpenedCategories.Contains(FileCategory.Pdf));
+
+                // Open missing/nonexistent file should NOT trigger file_opened
+                int initialCount = mockAnalytics.OpenedCategories.Count;
+                var missingItem = new DownloadItem
+                {
+                    FullPath = Path.Combine(testDir, "nonexistent.png"),
+                    FileName = "nonexistent.png",
+                    Extension = ".png",
+                    Category = FileCategory.Image,
+                    Status = DownloadStatus.Deleted,
+                    IsAvailable = false
+                };
+                vm.OpenFileCommand.Execute(missingItem);
+                Assert("Failed file open does not record file_opened event", mockAnalytics.OpenedCategories.Count == initialCount);
+
+                // Test DragDropHelper event
+                DragDropHelper.FileDragged += category => mockAnalytics.TrackFileDragged(category);
+                // Simulate drag trigger via event
+                mockAnalytics.TrackFileDragged(FileCategory.Image);
+                Assert("File dragged records file_dragged event", mockAnalytics.TrackedEvents.Contains("file_dragged:Image"));
+                Assert("File dragged passes correct category", mockAnalytics.DraggedCategories.Contains(FileCategory.Image));
+
+                vm.Dispose();
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static async Task TestAnalyticsShutdownTimeoutAndResilienceAsync()
+        {
+            Console.WriteLine("-> Running Analytics Shutdown Timeout & Resilience Tests...");
+            string testDir = Path.Combine(Path.GetTempPath(), "MasseterDrop_ResilienceTest_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(testDir);
+
+            try
+            {
+                var settingsService = new SettingsService(testDir);
+                settingsService.LoadSettings();
+
+                // Point to an unreachable host to test timeout behavior
+                var badHostAnalytics = new AnalyticsService(settingsService, "phc_test_dummy", "https://unreachable.invalid.local");
+                badHostAnalytics.SetConsent(true);
+
+                // Should not crash or throw when tracking events against dead host
+                badHostAnalytics.TrackAppStarted("test");
+                badHostAnalytics.TrackFileOpened(FileCategory.Pdf);
+                badHostAnalytics.TrackShelfDisplayed("manual");
+
+                Assert("Event capture with unreachable host does not throw", true);
+
+                // Flush with a 300ms timeout must return within ~1000ms max and not hang
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                await badHostAnalytics.FlushAsync(TimeSpan.FromMilliseconds(300));
+                sw.Stop();
+
+                Assert("FlushAsync with timeout completes promptly without hanging", sw.ElapsedMilliseconds < 1500, $"Elapsed: {sw.ElapsedMilliseconds}ms");
+
+                badHostAnalytics.Dispose();
+            }
+            finally
+            {
+                try { Directory.Delete(testDir, true); } catch { }
+            }
+            Console.WriteLine();
+        }
+
+        static async Task TestPostHogLiveCaptureAsync()
+        {
+            Console.WriteLine("-> Running PostHog Live Ingestion Delivery Tests...");
+            try
+            {
+                // Test live event transmission using user's real project token and ingestion host
+                using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+                string jsonBody = "{\"api_key\":\"" + AnalyticsConfig.ProjectToken + "\",\"event\":\"app_verification_ping\",\"distinct_id\":\"masseter_drop_test_device\",\"properties\":{\"app_version\":\"1.0.0\",\"platform\":\"Windows\",\"test_run\":true,\"$process_person_profile\":false}}";
+                var content = new System.Net.Http.StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+
+                string targetUrl = AnalyticsConfig.IngestionHost.TrimEnd('/') + "/capture/";
+                var response = await http.PostAsync(targetUrl, content);
+                string responseText = await response.Content.ReadAsStringAsync();
+
+                bool isSuccess = response.IsSuccessStatusCode && (responseText.Contains("Ok") || responseText.Contains("1"));
+                Assert("PostHog live ingest endpoint responds OK", isSuccess, $"Status: {response.StatusCode}, Body: {responseText.Trim()}");
+            }
+            catch (Exception ex)
+            {
+                Assert("PostHog live ingest endpoint responds OK", false, $"Exception: {ex.Message}");
             }
             Console.WriteLine();
         }

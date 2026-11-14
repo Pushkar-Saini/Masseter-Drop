@@ -138,18 +138,18 @@
                 </LinearGradientBrush>
             </Border.BorderBrush>
 
-            <!-- Translucent Dark Glass Tint (Lets desktop wallpaper blur through) -->
+            <!-- Translucent Dark Frosted Glass Tint -->
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0.5,1">
-                    <GradientStop Color="#45181C26" Offset="0.0" />
-                    <GradientStop Color="#3011141D" Offset="0.5" />
-                    <GradientStop Color="#220D1016" Offset="1.0" />
+                    <GradientStop Color="#F0181C26" Offset="0.0" />
+                    <GradientStop Color="#E611141D" Offset="0.5" />
+                    <GradientStop Color="#DC0D1016" Offset="1.0" />
                 </LinearGradientBrush>
             </Border.Background>
 
             <!-- Soft, diffuse multi-layered drop shadow -->
             <Border.Effect>
-                <DropShadowEffect BlurRadius="36" ShadowDepth="8" Opacity="0.48" Color="#000000" />
+                <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.45" Color="#000000" />
             </Border.Effect>
 
             <Grid>

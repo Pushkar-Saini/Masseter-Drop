@@ -22,6 +22,7 @@ namespace MasseterDrop.Views
     {
         private readonly SettingsService _settingsService;
         private readonly DownloadsViewModel _viewModel;
+        private readonly IAnalyticsService? _analyticsService;
         private readonly DispatcherTimer _autoDismissTimer;
         private readonly DispatcherTimer _countdownTicker;
 
@@ -40,11 +41,12 @@ namespace MasseterDrop.Views
 
         public DownloadsViewModel ViewModel => _viewModel;
 
-        public DownloadShelfWindow(SettingsService settingsService, DownloadsViewModel viewModel)
+        public DownloadShelfWindow(SettingsService settingsService, DownloadsViewModel viewModel, IAnalyticsService? analyticsService = null)
         {
             InitializeComponent();
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+            _analyticsService = analyticsService;
 
             DataContext = _viewModel;
 
@@ -82,10 +84,6 @@ namespace MasseterDrop.Views
 
             // Zero Focus Stealing: Configure as non-activating tool window
             NativeMethods.SetNonActivatingToolWindow(hwnd);
-            NativeMethods.ApplyModernWindowStyle(this, isDarkMode: true);
-
-            // Enable real OS-level Acrylic glass blur behind the window
-            NativeMethods.EnableAcrylicBlur(hwnd, 0x4010141D);
         }
 
         private void DownloadShelfWindow_Loaded(object sender, RoutedEventArgs e)
@@ -113,6 +111,7 @@ namespace MasseterDrop.Views
 
         public void ShowAutoPopup(DownloadItem item)
         {
+            bool wasVisible = IsVisible && !_isDismissing;
             _isDismissing = false;
             PositionNearTaskbar();
             StopSpotlightTracking(snapToRest: true);
@@ -132,6 +131,11 @@ namespace MasseterDrop.Views
                     NativeMethods.ShowWindow(helper.Handle, NativeMethods.SW_SHOWNOACTIVATE);
                 }
                 Show();
+            }
+
+            if (!wasVisible)
+            {
+                _analyticsService?.TrackShelfDisplayed("automatic");
             }
 
             // Animate entrance: Opacity 0 -> 1, TranslateY 22 -> 0, Scale 0.95 -> 1.0
@@ -161,16 +165,17 @@ namespace MasseterDrop.Views
         {
             if (IsVisible && !_isDismissing)
             {
-                DismissShelf();
+                DismissShelf("tray_toggle");
             }
             else
             {
-                ShowManual();
+                ShowManual(isReopen: true);
             }
         }
 
-        public void ShowManual()
+        public void ShowManual(bool isReopen = false)
         {
+            bool wasVisible = IsVisible && !_isDismissing;
             _isDismissing = false;
             PositionNearTaskbar();
             StopSpotlightTracking(snapToRest: true);
@@ -180,6 +185,15 @@ namespace MasseterDrop.Views
             ShelfTranslateTransform.Y = 18.0;
 
             Show();
+
+            if (!wasVisible)
+            {
+                if (isReopen)
+                {
+                    _analyticsService?.TrackShelfReopened("tray");
+                }
+                _analyticsService?.TrackShelfDisplayed("manual");
+            }
 
             var fadeIn = new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(180))
             {
@@ -204,10 +218,12 @@ namespace MasseterDrop.Views
             DismissalProgressBar.Value = 100;
         }
 
-        public void DismissShelf()
+        public void DismissShelf(string reason = "manual")
         {
             if (_isDismissing || !IsVisible) return;
             _isDismissing = true;
+
+            _analyticsService?.TrackShelfDismissed(reason);
 
             StopAutoDismiss();
             StopSpotlightTracking(snapToRest: true);
@@ -267,7 +283,7 @@ namespace MasseterDrop.Views
         {
             if (!_isHovered && !_isSettingsOpen)
             {
-                DismissShelf();
+                DismissShelf("auto_dismiss");
             }
         }
 
@@ -403,7 +419,7 @@ namespace MasseterDrop.Views
         {
             if (e.Key == Key.Escape)
             {
-                DismissShelf();
+                DismissShelf("escape_key");
                 e.Handled = true;
             }
         }
@@ -414,7 +430,7 @@ namespace MasseterDrop.Views
 
             if (_settingsService.CurrentSettings.AutoDismissOnDeactivate && !_isHovered && IsVisible)
             {
-                DismissShelf();
+                DismissShelf("deactivated");
             }
         }
 
@@ -453,12 +469,12 @@ namespace MasseterDrop.Views
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
-            DismissShelf();
+            DismissShelf("close_button");
         }
 
         private void DismissMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            DismissShelf();
+            DismissShelf("context_menu");
         }
 
         private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
@@ -479,7 +495,7 @@ namespace MasseterDrop.Views
             var settingsWin = new SettingsWindow(_settingsService, () =>
             {
                 _viewModel.ReloadSettings();
-            })
+            }, _analyticsService)
             {
                 Owner = this
             };

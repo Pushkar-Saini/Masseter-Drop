@@ -124,6 +124,14 @@ namespace MasseterDrop.Helpers
         {
             try
             {
+                // Windows with AllowsTransparency use WPF per-pixel layered alpha.
+                // Requesting DWM window corner rounding on them causes Windows 11 DWM
+                // to render an unwanted rectangular OS border around the transparent margins.
+                if (window.AllowsTransparency)
+                {
+                    return;
+                }
+
                 var helper = new WindowInteropHelper(window);
                 IntPtr hwnd = helper.EnsureHandle();
                 if (hwnd == IntPtr.Zero) return;
